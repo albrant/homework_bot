@@ -2,10 +2,12 @@ import logging
 import os
 import time
 
+from http import HTTPStatus
 import requests
 from dotenv import load_dotenv
 from requests.exceptions import HTTPError
 from telegram import Bot
+import simplejson
 
 load_dotenv()
 
@@ -20,6 +22,7 @@ HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 HOMEWORK_STATUSES = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -30,8 +33,11 @@ HOMEWORK_STATUSES = {
 
 def send_message(bot, message):
     """Функция отправляет в заданный чат Телеграмм указанный текст."""
-    bot.send_message(TELEGRAM_CHAT_ID, message)
-    logging.info(f'Сообщение отправлено: {message}')
+    try:
+        bot.send_message(TELEGRAM_CHAT_ID, message)
+        logger.info(f'Сообщение отправлено: {message}')
+    except Exception as err:
+        logger.error(f'Сообщение не отправлено: {err}')
 
 
 def get_api_answer(current_timestamp):
@@ -40,25 +46,37 @@ def get_api_answer(current_timestamp):
     params = {'from_date': timestamp}
     try:
         response = requests.get(ENDPOINT, headers=HEADERS, params=params)
+    except TimeoutError as time_out:
+        logger.error(f'Превышено время ожидания запроса: {time_out}')
     except HTTPError as http_err:
-        logging.error(f'Возникла ошибка HTTP: {http_err}')
+        logger.error(f'Возникла ошибка HTTP: {http_err}')
+    except ConnectionError as conn_err:
+        logger.error(f'Ошибка соединения с сервером: {conn_err}')
     except Exception as err:
-        logging.error(f'При запросе возникла какая-то ошибка: {err}')
+        logger.error(f'При запросе возникла какая-то ошибка: {err}')
     else:
-        logging.info('Отправлен запрос на сервер')
-        if response.status_code == 200:
-            return response.json()
+        logger.info('Отправлен запрос на сервер')
+        if response.status_code == HTTPStatus.OK:
+            try:
+                return response.json()
+            except simplejson.JSONDecodeError:
+                logger.error('Не удалось преобразовать ответ к формату json')
         else:
             raise Exception('Проблемы с API Яндекс.Практикума')
 
 
 def check_response(response):
     """проверяет ответ на ошибки и возвращает список домашних работ."""
-    homeworks = response['homeworks']
+    if not isinstance(response, dict):
+        raise TypeError('Данные переданы не в виде словаря')
+    if 'homeworks' in response:
+        homeworks = response['homeworks']
+    else:
+        raise Exception('Данные не имеют ключа homeworks')
     if not isinstance(homeworks, list):
-        raise Exception('Домашка пришла не в виде списка')
+        raise TypeError('Домашка пришла не в виде списка')
     if len(homeworks) == 0:
-        logging.info('При парсинге ответа получен пустой словарь')
+        logger.info('При парсинге ответа получен пустой список')
     return homeworks
 
 
@@ -95,9 +113,9 @@ def check_tokens():
 def main():
     """Основная логика работы бота."""
     old_message = ''  # использую эту переменную, чтобы сохранять сообщения
-    if not(check_tokens()):
-        logging.critical('Не получилось считать переменные окружения')
-        exit
+    if not check_tokens():
+        logger.critical('Не получилось считать переменные окружения')
+        exit()
 
     bot = Bot(token=TELEGRAM_TOKEN)
     current_timestamp = int(time.time())
@@ -106,7 +124,6 @@ def main():
         try:
             api_answer = get_api_answer(current_timestamp)
             homeworks = check_response(api_answer)
-            print(homeworks)
             for hw in homeworks:
                 verdict_message = parse_status(hw)
                 if old_message != verdict_message:
@@ -117,10 +134,9 @@ def main():
 
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
-            logging.error(message)
+            send_message(bot, message)
+            logger.error(message)
             time.sleep(RETRY_TIME)
-        else:
-            pass
 
 
 if __name__ == '__main__':
