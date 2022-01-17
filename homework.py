@@ -8,9 +8,6 @@ from requests.exceptions import HTTPError
 from telegram import Bot
 
 load_dotenv()
-need_to_send_message = True  # чтобы не отправлять повторные сообщения
-data = {}  # сюда буду сохранять полученные данные, чтобы не повторять
-# отправку сообщения, когда снова получу эту же информацию
 
 PRACTICUM_TOKEN = os.getenv('TOKEN_PRAKTIKUM')
 TELEGRAM_TOKEN = os.getenv('TOKEN_TELEGRAM')
@@ -35,7 +32,6 @@ def send_message(bot, message):
     """Функция отправляет в заданный чат Телеграмм указанный текст."""
     bot.send_message(TELEGRAM_CHAT_ID, message)
     logging.info(f'Сообщение отправлено: {message}')
-    # доработать проверку на сбой при отправке сообщения
 
 
 def get_api_answer(current_timestamp):
@@ -58,7 +54,9 @@ def get_api_answer(current_timestamp):
 
 def check_response(response):
     """проверяет ответ на ошибки и возвращает список домашних работ."""
-    homeworks = response.get('homeworks')
+    homeworks = response['homeworks']
+    if not isinstance(homeworks, list):
+        raise Exception('Домашка пришла не в виде списка')
     if len(homeworks) == 0:
         logging.info('При парсинге ответа получен пустой словарь')
     return homeworks
@@ -66,24 +64,21 @@ def check_response(response):
 
 def parse_status(homework):
     """Функция распарсивает полученный ответ."""
-    try:
-        homework_name = homework.get('homework_name')
-        homework_status = homework.get('status')
-        need_to_send_message = True
-        if homework_name in data:
-            if homework_status == data[homework_name]:
-                need_to_send_message = False
-            else:
-                data[homework_name] = homework_status
-        if homework_status in HOMEWORK_STATUSES:
-            verdict = HOMEWORK_STATUSES[homework_status]
-            return f'Изменился статус проверки работы "{homework_name}". {verdict}'
-        else:
-            message = (f'Получен неизвестный статус - {homework_status}')
-            logging.error(message)
-            return message
-    except Exception:
-        logging.error('При парсинге ответа не обнаружены нужные ключи')
+    if 'homework_name' in homework:
+        homework_name = homework['homework_name']
+    else:
+        raise KeyError('При парсинге ответа не обнаружено название работы')
+    if 'status' in homework:
+        homework_status = homework['status']
+    else:
+        raise KeyError('При парсинге ответа не обнаружен статус работы')
+
+    if homework_status in HOMEWORK_STATUSES:
+        verdict = HOMEWORK_STATUSES[homework_status]
+        return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    else:
+        message = (f'Получен неизвестный статус - {homework_status}')
+        raise Exception(message)
 
 
 def check_tokens():
@@ -99,6 +94,7 @@ def check_tokens():
 
 def main():
     """Основная логика работы бота."""
+    old_message = ''  # использую эту переменную, чтобы сохранять сообщения
     if not(check_tokens()):
         logging.critical('Не получилось считать переменные окружения')
         exit
@@ -108,13 +104,13 @@ def main():
 
     while True:
         try:
-            api_answer = get_api_answer(current_timestamp - 25 * 24 * 60 * 60)
-            # что делать с теми статусами, которые уже были отправлены?
+            api_answer = get_api_answer(current_timestamp)
             homeworks = check_response(api_answer)
             print(homeworks)
-            for homework in homeworks:
-                verdict_message = parse_status(homework)
-                if need_to_send_message:
+            for hw in homeworks:
+                verdict_message = parse_status(hw)
+                if old_message != verdict_message:
+                    old_message = verdict_message
                     send_message(bot, verdict_message)
             current_timestamp = int(time.time())
             time.sleep(RETRY_TIME)
