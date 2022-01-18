@@ -6,7 +6,7 @@ from http import HTTPStatus
 import requests
 from dotenv import load_dotenv
 from requests.exceptions import HTTPError
-from telegram import Bot
+from telegram import Bot, TelegramError
 import simplejson
 
 load_dotenv()
@@ -36,7 +36,7 @@ def send_message(bot, message):
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logger.info(f'Сообщение отправлено: {message}')
-    except Exception as err:
+    except TelegramError as err:
         logger.error(f'Сообщение не отправлено: {err}')
 
 
@@ -53,7 +53,7 @@ def get_api_answer(current_timestamp):
     except ConnectionError as conn_err:
         logger.error(f'Ошибка соединения с сервером: {conn_err}')
     except Exception as err:
-        logger.error(f'При запросе возникла какая-то ошибка: {err}')
+        logger.error(f'При запросе возникла непредвиденная ошибка: {err}')
     else:
         logger.info('Отправлен запрос на сервер')
         if response.status_code == HTTPStatus.OK:
@@ -72,7 +72,7 @@ def check_response(response):
     if 'homeworks' in response:
         homeworks = response['homeworks']
     else:
-        raise Exception('Данные не имеют ключа homeworks')
+        raise KeyError('Данные не имеют ключа homeworks')
     if not isinstance(homeworks, list):
         raise TypeError('Домашка пришла не в виде списка')
     if len(homeworks) == 0:
